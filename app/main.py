@@ -12,6 +12,8 @@ def main():
     
     if request.startswith(b"GET / "):
         client.sendall(b"HTTP/1.1 200 OK\r\n\r\n")
+    elif request.startswith(b"GET /echo/"):
+        client.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 3\r\n\r\nabc")
     else:
         client.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n")
 
