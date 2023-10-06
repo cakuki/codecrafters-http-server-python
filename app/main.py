@@ -16,7 +16,7 @@ def main():
         url = request.decode("utf-8").split("\r\n")[0].split(" ")[1]
         arg = url.split("/")[2]
         # send back the argument as body, and set the content length
-        client.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: " + str(len(arg)).encode("utf-8") + b"\r\n\r\n" + arg.encode("utf-8"))
+        client.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " + str(len(arg)).encode("utf-8") + b"\r\n\r\n" + arg.encode("utf-8"))
     else:
         client.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n")
 
