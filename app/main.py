@@ -6,10 +6,15 @@ def main():
     print("Logs from your program will appear here!")
 
     server_socket = socket.create_server(("localhost", 4221), reuse_port=True)
-    client, addr = server_socket.accept() # wait for client
 
-    request = client.recv(1024)
+    # listen for connections from client loop forever
+    while True:
+        client, address = server_socket.accept()
+        request = client.recv(1024)
+        handle_request(request, client)
+        client.close()
 
+def handle_request(request, client):
     # get user-agent header from request, which could be in any order
     user_agent = ""
     for line in request.decode("utf-8").split("\r\n"):
