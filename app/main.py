@@ -14,7 +14,8 @@ def main():
         client.sendall(b"HTTP/1.1 200 OK\r\n\r\n")
     elif request.startswith(b"GET /echo/"):
         url = request.decode("utf-8").split("\r\n")[0].split(" ")[1]
-        arg = url.split("/")[2]
+        # split url after second slash, but only once
+        arg = url.split("/", 2)[2]
         # send back the argument as body, and set the content length
         client.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " + str(len(arg)).encode("utf-8") + b"\r\n\r\n" + arg.encode("utf-8"))
     else:
