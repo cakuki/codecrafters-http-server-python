@@ -1,6 +1,9 @@
 import os
+import re
 import socket
 import sys
+import threading
+from typing import Callable, NamedTuple
 
 
 class Request:
@@ -29,7 +32,9 @@ class Response:
     headers: dict[str, str]
     body: bytes
 
-    def __init__(self, status: str, headers: dict[str, str], body: bytes):
+    def __init__(
+        self, status: str = "200 OK", headers: dict[str, str] = {}, body: bytes = b""
+    ):
         self.status = status
         self.headers = headers
         self.body = body
@@ -40,10 +45,10 @@ class Response:
 
         return (
             b"HTTP/1.1 "
-            + self.status.encode("utf-8")
+            + self.status.encode()
             + b"\r\n"
             + b"\r\n".join(
-                key.encode("utf-8") + b": " + value.encode("utf-8")
+                key.encode() + b": " + value.encode()
                 for key, value in self.headers.items()
             )
             + b"\r\n\r\n"
@@ -51,35 +56,44 @@ class Response:
         )
 
 
+class Route(NamedTuple):
+    method: str
+    path: str
+    pattern: re.Pattern
+    handler: Callable[[Request], Response]
+
+
 class Router:
+    routes: list[Route]
+
     def __init__(self):
-        self.routes_get = {}
-        self.routes_post = {}
+        self.routes = []
 
-    def add_route(self, method, path, handler):
-        if method == "GET":
-            self.routes_get[path] = handler
-        elif method == "POST":
-            self.routes_post[path] = handler
+    def add_route(self, method: str, path: str, handler: Callable[[Request], Response]):
+        # convert path to regex, support named arguments
+        pattern = re.compile(re.sub(r"(?<=/):(\w+)", "(?P<\\1>.*)", path))
+        self.routes.append(Route(method, path, pattern, handler))
 
-    def handle_request(self, request, client):
-        routes = self.routes_get if request.method == "GET" else self.routes_post
+    def handle_request(self, sock):
+        request = Request(sock.recv(1024))
+        response = Response("404 Not Found")
 
-        # go through routes and find the first one that matches, support * wildcard
-        for path, handler in routes.items():
-            if path == request.path:
-                handler(request, client)
-                return
-            elif path.endswith("*"):
-                if request.path.startswith(path[:-1]):
-                    # add wildcard argument to request
-                    request.args = {"*": request.path[len(path[:-1]) :]}
-                    handler(request, client)
-                    return
+        matcher = (
+            (match, route)
+            for route in self.routes
+            if route.method == request.method
+            and (match := route.pattern.fullmatch(request.path))
+        )
 
-        # return 404
-        response = Response("404 Not Found", {}, b"")
-        client.sendall(response.to_bytes())
+        try:
+            match, route = next(matcher)
+            request.args = match.groupdict()
+            response = route.handler(request)
+        except StopIteration:
+            pass
+
+        sock.sendall(response.to_bytes())
+        sock.close()
 
     def get(self, path):
         def decorator(handler):
@@ -100,51 +114,55 @@ def main():
     server_socket = socket.create_server(("localhost", 4221), reuse_port=True)
 
     serve_dir = sys.argv[-1]
-    os.environ["SERVE_DIR"] = serve_dir
 
     router = Router()
 
     @router.get("/")
-    def index(request, client):
-        response = Response("200 OK", {}, b"")
-        client.sendall(response.to_bytes())
+    def index(request: Request):
+        return Response()
 
     @router.get("/user-agent")
-    def user_agent(request, client):
-        response = Response(
-            "200 OK",
-            {"Content-Type": "text/plain"},
-            request.headers["User-Agent"].encode("utf-8"),
+    def user_agent(request: Request):
+        return Response(
+            headers={"Content-Type": "text/plain"},
+            body=request.headers["User-Agent"].encode(),
         )
-        client.sendall(response.to_bytes())
 
-    @router.get("/echo/*")
-    def echo(request, client):
-        response = Response(
-            "200 OK", {"Content-Type": "text/plain"}, request.args["*"].encode("utf-8")
+    @router.get("/echo/:message")
+    def echo(request: Request):
+        return Response(
+            headers={"Content-Type": "text/plain"},
+            body=request.args["message"].encode(),
         )
-        client.sendall(response.to_bytes())
 
-    @router.get("/files/*")
-    def files(request, client):
-        print('request.path.split("/")[-1]', request.path.split("/")[-1])
-        print('request.args["*"]', request.args["*"])
-        filename = request.path.split("/")[-1]
+    @router.get("/files/:path")
+    def get_files(request: Request):
+        filename = request.args["path"]
         filepath = os.path.join(serve_dir, filename)
-        if os.path.isfile(filepath):
-            with open(filepath, "rb") as f:
-                response = Response("200 OK", {}, f.read())
-        else:
-            response = Response("404 Not Found", {}, b"")
-        client.sendall(response.to_bytes())
 
-    print("Listening...")
-    # listen for connections from client loop forever
+        if not os.path.isfile(filepath):
+            return Response("404 Not Found")
+
+        with open(filepath, "rb") as f:
+            return Response(
+                headers={"Content-Type": "application/octet-stream"},
+                body=f.read(),
+            )
+
+    @router.post("/files/:path")
+    def post_files(request: Request):
+        filename = request.args["path"]
+        filepath = os.path.join(serve_dir, filename)
+
+        with open(filepath, "wb") as f:
+            f.write(request.body)
+
+        return Response("201 OK")
+
     while True:
-        client, address = server_socket.accept()
-        request = Request(client.recv(1024))
-        router.handle_request(request, client)
-        client.close()
+        sock, _ = server_socket.accept()
+        thread = threading.Thread(target=router.handle_request, args=(sock,))
+        thread.start()
 
 
 if __name__ == "__main__":
